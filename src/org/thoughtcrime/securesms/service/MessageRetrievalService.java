@@ -1,9 +1,14 @@
 package org.thoughtcrime.securesms.service;
 
 import android.app.Service;
+import android.app.AlarmManager;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.IBinder;
+import android.os.SystemClock;
 import android.support.annotation.Nullable;
 import android.support.v4.app.NotificationCompat;
 import android.util.Log;
@@ -44,6 +49,8 @@ public class MessageRetrievalService extends Service implements InjectableType, 
   private NetworkRequirement         networkRequirement;
   private NetworkRequirementProvider networkRequirementProvider;
 
+  private ProdAlarmReceiver prodAlarmReceiver = null;
+
   @Inject
   public SignalServiceMessageReceiver receiver;
 
@@ -67,6 +74,7 @@ public class MessageRetrievalService extends Service implements InjectableType, 
     retrievalThread.start();
 
     setForegroundIfNecessary();
+    enableProddingIfNecessary();
   }
 
   public int onStartCommand(Intent intent, int flags, int startId) {
@@ -87,6 +95,11 @@ public class MessageRetrievalService extends Service implements InjectableType, 
       retrievalThread.stopThread();
     }
 
+    if (prodAlarmReceiver != null) {
+      prodAlarmReceiver.stop();
+      unregisterReceiver(prodAlarmReceiver);
+    }
+
     sendBroadcast(new Intent("org.thoughtcrime.securesms.RESTART"));
   }
 
@@ -100,6 +113,14 @@ public class MessageRetrievalService extends Service implements InjectableType, 
   @Override
   public IBinder onBind(Intent intent) {
     return null;
+  }
+
+  private void enableProddingIfNecessary() {
+    if (TextSecurePreferences.isGcmDisabled(this)) {
+      prodAlarmReceiver = new ProdAlarmReceiver();
+      registerReceiver(prodAlarmReceiver,
+                       new IntentFilter(ProdAlarmReceiver.WAKE_UP_THREADS_ACTION));
+    }
   }
 
   private void setForegroundIfNecessary() {
@@ -183,6 +204,72 @@ public class MessageRetrievalService extends Service implements InjectableType, 
     return pipe;
   }
 
+  public class ProdAlarmReceiver extends BroadcastReceiver {
+
+    private final int PRODDING_TIMEOUT_SECONDS = 60;
+
+    private int pipes;
+
+    public static final String WAKE_UP_THREADS_ACTION = "org.thoughtcrime.securesms.ProdAlarReceiver.WAKE_UP_THREADS";
+
+    private void setOrCancelAlarm(Context context, boolean set) {
+      Intent        intent        = new Intent(WAKE_UP_THREADS_ACTION);
+      PendingIntent pendingIntent = PendingIntent.getBroadcast(context, 0, intent, 0);
+      AlarmManager  alarmManager  = (AlarmManager)context.getSystemService(Context.ALARM_SERVICE);
+
+      alarmManager.cancel(pendingIntent);
+
+      if (set) {
+        Log.w(TAG, "Setting repeating alarm to prod the message pipe.");
+
+        alarmManager.setRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                                  SystemClock.elapsedRealtime() + TimeUnit.SECONDS.toMillis(PRODDING_TIMEOUT_SECONDS),
+                                  TimeUnit.SECONDS.toMillis(PRODDING_TIMEOUT_SECONDS),
+                                  pendingIntent);
+      } else {
+        Log.w(TAG, "Canceling message pipe prodding alarm.");
+      }
+    }
+
+    public synchronized void incrementPipes() {
+      if (pipes < 0) {
+        return;
+      }
+
+      pipes++;
+
+      if (pipes == 1) {
+        setOrCancelAlarm(MessageRetrievalService.this, true);
+      }
+    }
+
+    public synchronized void decrementPipes() {
+      if (pipes < 0) {
+        return;
+      }
+
+      pipes--;
+
+      assert (pipes >= 0);
+
+      if (pipes == 0) {
+        setOrCancelAlarm(MessageRetrievalService.this, false);
+      }
+    }
+
+    public synchronized void stop() {
+      pipes = -1;
+      setOrCancelAlarm(MessageRetrievalService.this, false);
+    }
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+      Log.w(TAG, "Prodding the message pipe.");
+      SignalServiceMessagePipe.prod();
+    }
+
+  }
+
   private class MessageRetrievalThread extends Thread implements Thread.UncaughtExceptionHandler {
 
     private AtomicBoolean stopThread = new AtomicBoolean(false);
@@ -202,6 +289,10 @@ public class MessageRetrievalService extends Service implements InjectableType, 
         pipe = receiver.createMessagePipe();
 
         SignalServiceMessagePipe localPipe = pipe;
+
+        if (prodAlarmReceiver != null) {
+          prodAlarmReceiver.incrementPipes();
+        }
 
         try {
           while (isConnectionNecessary() && !stopThread.get()) {
@@ -226,6 +317,11 @@ public class MessageRetrievalService extends Service implements InjectableType, 
           Log.w(TAG, e);
         } finally {
           Log.w(TAG, "Shutting down pipe...");
+
+          if (prodAlarmReceiver != null) {
+            prodAlarmReceiver.decrementPipes();
+          }
+
           shutdown(localPipe);
         }
 
