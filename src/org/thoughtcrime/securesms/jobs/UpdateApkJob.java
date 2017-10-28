@@ -50,7 +50,7 @@ public class UpdateApkJob extends ContextJob {
 
   @Override
   public void onRun() throws IOException, PackageManager.NameNotFoundException {
-    if (!BuildConfig.PLAY_STORE_DISABLED) return;
+    if (true || !BuildConfig.PLAY_STORE_DISABLED) return;
 
     Log.i(TAG, "Checking for APK update...");
 
