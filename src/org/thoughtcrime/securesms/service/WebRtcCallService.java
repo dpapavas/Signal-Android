@@ -132,6 +132,7 @@ public class WebRtcCallService extends Service implements InjectableType, PeerCo
   public static final String ACTION_BLUETOOTH_CHANGE     = "BLUETOOTH_CHANGE";
   public static final String ACTION_WIRED_HEADSET_CHANGE = "WIRED_HEADSET_CHANGE";
   public static final String ACTION_SCREEN_OFF           = "SCREEN_OFF";
+  public static final String ACTION_SCREEN_ON            = "SCREEN_ON";
   public static final String ACTION_CHECK_TIMEOUT        = "CHECK_TIMEOUT";
   public static final String ACTION_IS_IN_CALL_QUERY     = "IS_IN_CALL";
 
@@ -187,6 +188,8 @@ public class WebRtcCallService extends Service implements InjectableType, PeerCo
     registerIncomingPstnCallReceiver();
     registerUncaughtExceptionHandler();
     registerWiredHeadsetStateReceiver();
+
+    registerPowerButtonReceiver();
   }
 
   @Override
@@ -207,7 +210,8 @@ public class WebRtcCallService extends Service implements InjectableType, PeerCo
       else if (intent.getAction().equals(ACTION_SET_MUTE_VIDEO))            handleSetMuteVideo(intent);
       else if (intent.getAction().equals(ACTION_BLUETOOTH_CHANGE))          handleBluetoothChange(intent);
       else if (intent.getAction().equals(ACTION_WIRED_HEADSET_CHANGE))      handleWiredHeadsetChange(intent);
-      else if (intent.getAction().equals((ACTION_SCREEN_OFF)))              handleScreenOffChange(intent);
+      else if (intent.getAction().equals(ACTION_SCREEN_OFF) ||
+               intent.getAction().equals(ACTION_SCREEN_ON))                 handleScreenOffChange(intent);
       else if (intent.getAction().equals(ACTION_REMOTE_VIDEO_MUTE))         handleRemoteVideoMute(intent);
       else if (intent.getAction().equals(ACTION_RESPONSE_MESSAGE))          handleResponseMessage(intent);
       else if (intent.getAction().equals(ACTION_ICE_MESSAGE))               handleRemoteIceCandidate(intent);
@@ -299,9 +303,13 @@ public class WebRtcCallService extends Service implements InjectableType, PeerCo
 
   private void registerPowerButtonReceiver() {
     if (powerButtonReceiver == null) {
+      IntentFilter intentFilter = new IntentFilter();
+
       powerButtonReceiver = new PowerButtonReceiver();
 
-      registerReceiver(powerButtonReceiver, new IntentFilter(Intent.ACTION_SCREEN_OFF));
+      intentFilter.addAction(Intent.ACTION_SCREEN_OFF);
+      intentFilter.addAction(Intent.ACTION_SCREEN_ON);
+      registerReceiver(powerButtonReceiver, intentFilter);
     }
   }
 
@@ -542,8 +550,6 @@ public class WebRtcCallService extends Service implements InjectableType, PeerCo
       audioManager.initializeAudioForCall();
       audioManager.startIncomingRinger();
 
-      registerPowerButtonReceiver();
-
       setCallInProgressNotification(TYPE_INCOMING_RINGING, recipient);
     } else if (callState == CallState.STATE_DIALING) {
       if (this.recipient == null) throw new AssertionError("assert");
@@ -579,8 +585,6 @@ public class WebRtcCallService extends Service implements InjectableType, PeerCo
     else                   lockManager.updatePhoneState(LockManager.PhoneState.IN_CALL);
 
     sendMessage(WebRtcViewModel.State.CALL_CONNECTED, recipient, localVideoEnabled, remoteVideoEnabled, bluetoothAvailable, microphoneEnabled);
-
-    unregisterPowerButtonReceiver();
 
     setCallInProgressNotification(TYPE_ESTABLISHED, recipient);
 
@@ -825,11 +829,21 @@ public class WebRtcCallService extends Service implements InjectableType, PeerCo
   }
 
   private void handleScreenOffChange(Intent intent) {
-    if (callState == CallState.STATE_ANSWERING ||
-        callState == CallState.STATE_LOCAL_RINGING)
-    {
-      Log.w(TAG, "Silencing incoming ringer...");
-      audioManager.silenceIncomingRinger();
+    if (intent.getAction().equals(ACTION_SCREEN_OFF)) {
+      Log.w(TAG, "Screen turned off, notifying lock manager...");
+
+      lockManager.setScreenTurnedOff(true);
+
+      if (callState == CallState.STATE_ANSWERING ||
+          callState == CallState.STATE_LOCAL_RINGING)
+        {
+          Log.w(TAG, "Silencing incoming ringer...");
+          audioManager.silenceIncomingRinger();
+        }
+    } else {
+      Log.w(TAG, "Screen turned on, notifying lock manager...");
+
+      lockManager.setScreenTurnedOff(false);
     }
   }
 
@@ -1184,6 +1198,10 @@ public class WebRtcCallService extends Service implements InjectableType, PeerCo
       if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
         Intent serviceIntent = new Intent(context, WebRtcCallService.class);
         serviceIntent.setAction(WebRtcCallService.ACTION_SCREEN_OFF);
+        context.startService(serviceIntent);
+      } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) {
+        Intent serviceIntent = new Intent(context, WebRtcCallService.class);
+        serviceIntent.setAction(WebRtcCallService.ACTION_SCREEN_ON);
         context.startService(serviceIntent);
       }
     }

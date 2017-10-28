@@ -26,6 +26,8 @@ public class LockManager {
 
   private int orientation = AccelerometerListener.ORIENTATION_UNKNOWN;
   private boolean proximityDisabled = false;
+  private PhoneState phoneState;
+  private boolean screenTurnedOff;
 
   public enum PhoneState {
     IDLE,
@@ -79,7 +81,9 @@ public class LockManager {
   }
 
   private void updateInCallLockState() {
-    if (orientation != AccelerometerListener.ORIENTATION_HORIZONTAL && wifiLockEnforced && !proximityDisabled) {
+    if (screenTurnedOff) {
+      setLockState(LockState.PARTIAL);
+    } else if (orientation != AccelerometerListener.ORIENTATION_HORIZONTAL && wifiLockEnforced && !proximityDisabled) {
       setLockState(LockState.PROXIMITY);
     } else {
       setLockState(LockState.FULL);
@@ -110,6 +114,16 @@ public class LockManager {
         accelerometerListener.enable(true);
         updateInCallLockState();
         break;
+    }
+
+    phoneState = state;
+  }
+
+  public void setScreenTurnedOff(boolean value) {
+    screenTurnedOff = value;
+
+    if (phoneState == PhoneState.IN_CALL || phoneState == PhoneState.IN_VIDEO) {
+      updateInCallLockState();
     }
   }
 
