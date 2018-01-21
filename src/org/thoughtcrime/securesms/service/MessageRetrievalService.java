@@ -12,6 +12,8 @@ import android.os.SystemClock;
 import android.support.annotation.Nullable;
 import android.support.v4.app.NotificationCompat;
 import android.util.Log;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 
 import org.thoughtcrime.securesms.ApplicationContext;
 import org.thoughtcrime.securesms.R;
@@ -50,6 +52,7 @@ public class MessageRetrievalService extends Service implements InjectableType, 
   private NetworkRequirementProvider networkRequirementProvider;
 
   private ProdAlarmReceiver prodAlarmReceiver = null;
+  private ConnectivityChangeReceiver connectivityChangeReceiver = null;
 
   @Inject
   public SignalServiceMessageReceiver receiver;
@@ -100,6 +103,10 @@ public class MessageRetrievalService extends Service implements InjectableType, 
       unregisterReceiver(prodAlarmReceiver);
     }
 
+    if (connectivityChangeReceiver != null) {
+      unregisterReceiver(connectivityChangeReceiver);
+    }
+
     sendBroadcast(new Intent("org.thoughtcrime.securesms.RESTART"));
   }
 
@@ -120,6 +127,10 @@ public class MessageRetrievalService extends Service implements InjectableType, 
       prodAlarmReceiver = new ProdAlarmReceiver();
       registerReceiver(prodAlarmReceiver,
                        new IntentFilter(ProdAlarmReceiver.WAKE_UP_THREADS_ACTION));
+
+      connectivityChangeReceiver = new ConnectivityChangeReceiver();
+      registerReceiver(connectivityChangeReceiver,
+                       new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
     }
   }
 
@@ -202,6 +213,33 @@ public class MessageRetrievalService extends Service implements InjectableType, 
 
   public static @Nullable SignalServiceMessagePipe getPipe() {
     return pipe;
+  }
+
+  public class ConnectivityChangeReceiver extends BroadcastReceiver {
+      private int currentNetType = -1;
+
+      @Override
+      public void onReceive(Context context, Intent intent) {
+          ConnectivityManager connMananger = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+
+          NetworkInfo netInfo = connMananger.getActiveNetworkInfo();
+          int previousNetType = currentNetType;
+
+          if (netInfo != null && (netInfo.isConnectedOrConnecting())) {
+              currentNetType = netInfo.getType();
+          } else {
+              currentNetType = -1;
+          }
+
+          Log.w(TAG, "Connectivity changed: " + (netInfo != null ? netInfo.toString() : "No network info"));
+
+          if (previousNetType != -1 && previousNetType != currentNetType) {
+              Log.w(TAG, "Shutting down pipe.");
+              shutdown(pipe);
+              SignalServiceMessagePipe.prod();
+          }
+      }
+
   }
 
   public class ProdAlarmReceiver extends BroadcastReceiver {
