@@ -1,8 +1,12 @@
 package org.thoughtcrime.securesms.service;
 
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.net.ConnectivityManager;
+import android.net.NetworkInfo;
 import android.os.IBinder;
 import android.support.annotation.Nullable;
 import android.support.v4.app.NotificationCompat;
@@ -43,6 +47,7 @@ public class MessageRetrievalService extends Service implements InjectableType, 
 
   private NetworkRequirement         networkRequirement;
   private NetworkRequirementProvider networkRequirementProvider;
+  private ConnectivityChangeReceiver connectivityChangeReceiver;
 
   @Inject
   public SignalServiceMessageReceiver receiver;
@@ -66,6 +71,10 @@ public class MessageRetrievalService extends Service implements InjectableType, 
     retrievalThread = new MessageRetrievalThread();
     retrievalThread.start();
 
+    connectivityChangeReceiver = new ConnectivityChangeReceiver();
+    registerReceiver(connectivityChangeReceiver,
+                     new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
+
     setForegroundIfNecessary();
   }
 
@@ -85,6 +94,10 @@ public class MessageRetrievalService extends Service implements InjectableType, 
 
     if (retrievalThread != null) {
       retrievalThread.stopThread();
+    }
+
+    if (connectivityChangeReceiver != null) {
+      unregisterReceiver(connectivityChangeReceiver);
     }
 
     sendBroadcast(new Intent("org.thoughtcrime.securesms.RESTART"));
@@ -152,10 +165,12 @@ public class MessageRetrievalService extends Service implements InjectableType, 
   }
 
   private synchronized void waitForConnectionNecessary() {
-    try {
-      while (!isConnectionNecessary()) wait();
-    } catch (InterruptedException e) {
-      throw new AssertionError(e);
+    while (!isConnectionNecessary()) {
+      try {
+        wait();
+      } catch (InterruptedException e) {
+        Log.w(TAG, "Retrieval thread interrupted while not connected; ignoring.");
+      }
     }
   }
 
@@ -183,6 +198,32 @@ public class MessageRetrievalService extends Service implements InjectableType, 
     return pipe;
   }
 
+  public class ConnectivityChangeReceiver extends BroadcastReceiver {
+      private int currentNetType = -1;
+
+      @Override
+      public void onReceive(Context context, Intent intent) {
+          final ConnectivityManager connMananger = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+
+          final NetworkInfo netInfo = connMananger.getActiveNetworkInfo();
+          final int previousNetType = currentNetType;
+
+          if (netInfo != null && (netInfo.isConnectedOrConnecting())) {
+              currentNetType = netInfo.getType();
+          } else {
+              currentNetType = -1;
+          }
+
+          Log.w(TAG, "Connectivity changed: " + (netInfo != null ? netInfo.toString() : "No network info"));
+
+          if (previousNetType != -1 && previousNetType != currentNetType) {
+              Log.w(TAG, "Interrupting the retrieval thread to recycle the pipe.");
+              retrievalThread.interrupt();
+          }
+      }
+
+  }
+
   private class MessageRetrievalThread extends Thread implements Thread.UncaughtExceptionHandler {
 
     private AtomicBoolean stopThread = new AtomicBoolean(false);
@@ -204,7 +245,7 @@ public class MessageRetrievalService extends Service implements InjectableType, 
         SignalServiceMessagePipe localPipe = pipe;
 
         try {
-          while (isConnectionNecessary() && !stopThread.get()) {
+          while (isConnectionNecessary() && !stopThread.get() && !Thread.interrupted()) {
             try {
               Log.w(TAG, "Reading message...");
               localPipe.read(REQUEST_TIMEOUT_MINUTES, TimeUnit.MINUTES,
@@ -222,6 +263,8 @@ public class MessageRetrievalService extends Service implements InjectableType, 
               Log.w(TAG, e);
             }
           }
+        } catch (InterruptedException e) {
+          Log.w(TAG, "Retrieval thread interrupted...");
         } catch (Throwable e) {
           Log.w(TAG, e);
         } finally {
