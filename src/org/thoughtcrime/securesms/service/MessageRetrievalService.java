@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import javax.inject.Inject;
 
@@ -63,6 +64,7 @@ public class MessageRetrievalService extends Service implements InjectableType, 
   private MessageRetrievalThread retrievalThread  = null;
 
   public static SignalServiceMessagePipe pipe = null;
+  public static AtomicReference<SignalServiceMessagePipe> pipeReference = new AtomicReference<>();
 
   @Override
   public void onCreate() {
@@ -283,6 +285,10 @@ public class MessageRetrievalService extends Service implements InjectableType, 
     return pipe;
   }
 
+  public static AtomicReference<SignalServiceMessagePipe> getPipeReference() {
+    return pipeReference;
+  }
+
   private class MessageRetrievalThread extends Thread implements Thread.UncaughtExceptionHandler {
 
     private AtomicBoolean stopThread = new AtomicBoolean(false);
@@ -299,9 +305,10 @@ public class MessageRetrievalService extends Service implements InjectableType, 
         waitForConnectionNecessary();
 
         Log.i(TAG, "Making websocket connection....");
-        pipe = receiver.createMessagePipe();
+        final SignalServiceMessagePipe localPipe = receiver.createMessagePipe();
 
-        SignalServiceMessagePipe localPipe = pipe;
+        pipe = localPipe;
+        pipeReference.set(localPipe);
 
         try {
           while (isConnectionNecessary() && !stopThread.get() && !interrupted()) {

@@ -115,10 +115,8 @@ public class SignalCommunicationModule {
                                                           new DynamicCredentialsProvider(context),
                                                           new SignalProtocolStoreImpl(context),
                                                           BuildConfig.USER_AGENT,
-                                                          Optional.fromNullable(MessageRetrievalService.getPipe()),
+                                                          MessageRetrievalService.getPipeReference(),
                                                           Optional.of(new SecurityEventListener(context)));
-    } else {
-      this.messageSender.setMessagePipe(MessageRetrievalService.getPipe());
     }
 
     return this.messageSender;
